@@ -1,3 +1,6 @@
 {
-    "python.languageServer": "None"
+    "python.languageServer": "None",
+    "editor.fontSize": 25,
+    "editor.fontLigatures": false,
+    "workbench.tree.fontSize": 22  // 调整为你需要的字体大小（如12、14、16等）
 }
