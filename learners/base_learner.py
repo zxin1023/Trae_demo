@@ -67,6 +67,17 @@ class BaseLearner:
         for idx, img in enumerate(images):
             save_path = vis_dir / f"{prefix}_{idx}.png"
             img.save(save_path)
+            
+    def calculate_accuracy(self, outputs, targets):
+        with torch.no_grad():
+            # 获取预测概率最高的类别索引
+            _, predicted = torch.max(outputs.data, 1)
+            # 计算总样本数
+            total = targets.size(0)
+            # 计算预测正确的样本数
+            correct = (predicted == targets).sum().item()
+            # 返回准确率
+            return correct / total
 
     def train_one_epoch(self, train_loader, epoch):
         """训练一个epoch"""
@@ -123,6 +134,10 @@ class BaseLearner:
             # 验证
             val_metrics = self.validate(valid_loader, epoch)
             self.log_metrics('val', val_metrics, epoch)
+            
+            # 记录到tensorboard
+            for name, value in {**train_metrics, **val_metrics}.items():
+                self.writer.add_scalar(name, value, epoch)
 
             # 检查是否是最佳模型
             is_best = val_metrics['val_loss'] < self.best_val_metrics['val_loss']
@@ -132,7 +147,7 @@ class BaseLearner:
                 # 如果有测试集，使用最佳模型进行测试
                 if test_loader and self.config.TEST_WITH_BEST_MODEL:
                     test_metrics = self.test(test_loader)
-                    self.log_metrics('test', test_metrics['metrics'], epoch)
+                    self.log_progress('test', epoch, 0, 1, test_metrics['metrics'])
             
             # 保存检查点
             self.save_training_state(epoch, train_metrics, val_metrics, is_best)
@@ -144,6 +159,12 @@ class BaseLearner:
             if self.early_stopping(val_metrics['val_loss']):
                 logging.info(f"Early stopping triggered at epoch {epoch}")
                 break
+        
+        # 训练结束后的最终测试
+        if test_loader and not self.config.TEST_WITH_BEST_MODEL:
+            logging.info("Performing final test...")
+            # 加载最佳模型
+            self.checkpoint_manager.load_best_model()
 
 
         # 训练结束后，关闭tensorboard   
