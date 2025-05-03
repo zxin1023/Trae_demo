@@ -30,5 +30,7 @@ class Config:
     TEST_WITH_LAST_MODEL = True       # 是否使用最后一个模型进行测试
     TEST_WITH_AVERAGE_MODEL = True    # 是否使用平均模型进行测试
     SAVE_PREDICTIONS = True           # 是否保存预测结果
+    TEST_DURING_TRAINING = False       # 是否在训练过程中进行测试
+    TEST_FREQUENCY = 5                # 测试频率
     
     

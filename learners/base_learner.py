@@ -1,8 +1,11 @@
+from copy import deepcopy
 import logging
-from tqdm import tqdm
+# from tqdm import tqdm
+import tqdm
 import torch
 from torch.utils.tensorboard import SummaryWriter
 
+from utils import metrics
 from utils.metrics import AverageMeter
 from utils.checkpoint import CheckpointManager
 
@@ -48,6 +51,30 @@ class BaseLearner:
             ])
         logging.info("Logging setup complete.")
         
+    def log_metrics(self, mode, metrics, epoch):
+        """记录指标到日志和TensorBoard."""
+        log_str = f"Epoch {epoch} {mode.capitalize()} Metrics: "
+        metric_strs = []
+        for name, value in metrics.items():
+            # 记录到Tensorboard
+            self.writer.add_scalar(f'{mode}/{name}', value, epoch)
+            metric_strs.append(f'{name}: {value:.4f}')
+        log_str += ", ".join(metric_strs)
+        logging.info(log_str)
+        
+    def log_progress(self, mode, epoch, batch_idx, total_batches, metrics):
+        if isinstance(metrics, str):   # 处理简单消息, 例如“Training finished!”
+            logging.info(metrics)
+            return 
+        log_str = f"{mode.capitalize()} Epoch: {epoch} [{batch_idx} {total_batches}]"
+        metric_strs = []
+        # metrics 可能是一个 AverageMeter 对象或一个字典
+        avg_metrics = metrics.average() if hasattr(metrics, 'average') else metrics
+        for name, value in avg_metrics.items():
+            metric_strs.append(f"{name}: {value:.4f}")
+        log_str += " " + ", ".join(metric_strs)
+        logging.info(log_str)
+        
     def save_visualization(self, epoch, images, prefix=""):
         """保存可视化结果
         
@@ -68,7 +95,17 @@ class BaseLearner:
             save_path = vis_dir / f"{prefix}_{idx}.png"
             img.save(save_path)
             
+            
     def calculate_accuracy(self, outputs, targets):
+        """计算模型预测准确率
+        
+        Args:
+            outputs (torch.Tensor): 模型的输出预测结果，形状为 (batch_size, num_classes)
+            targets (torch.Tensor): 真实标签，形状为 (batch_size,)
+            
+        Returns:
+            float: 预测准确率，范围在 [0, 1] 之间
+        """
         with torch.no_grad():
             # 获取预测概率最高的类别索引
             _, predicted = torch.max(outputs.data, 1)
@@ -125,7 +162,6 @@ class BaseLearner:
             else:
                 logging.info("No checkpoint found. Starting training from scratch.")
         
- 
         for epoch in range(start_epoch, self.config.EPOCHS):
             # 训练
             train_metrics = self.train_one_epoch(train_loader, epoch)
@@ -134,10 +170,6 @@ class BaseLearner:
             # 验证
             val_metrics = self.validate(valid_loader, epoch)
             self.log_metrics('val', val_metrics, epoch)
-            
-            # 记录到tensorboard
-            for name, value in {**train_metrics, **val_metrics}.items():
-                self.writer.add_scalar(name, value, epoch)
 
             # 检查是否是最佳模型
             is_best = val_metrics['val_loss'] < self.best_val_metrics['val_loss']
@@ -145,8 +177,8 @@ class BaseLearner:
                 self.best_val_metrics = val_metrics['val_loss']
 
                 # 如果有测试集，使用最佳模型进行测试
-                if test_loader and self.config.TEST_WITH_BEST_MODEL:
-                    test_metrics = self.test(test_loader)
+                if test_loader and self.config.TEST_DURING_TRAINING:
+                    test_metrics = self.test(test_loader, use_best_model=self.config.TEST_WITH_BEST_MODEL)
                     self.log_progress('test', epoch, 0, 1, test_metrics['metrics'])
             
             # 保存检查点
@@ -159,20 +191,38 @@ class BaseLearner:
             if self.early_stopping(val_metrics['val_loss']):
                 logging.info(f"Early stopping triggered at epoch {epoch}")
                 break
+            
+            # 记录到tensorboard
+            # for name, value in {**train_metrics, **val_metrics}.items():
+            #     self.writer.add_scalar(name, value, epoch)
         
         # 训练结束后的最终测试
         if test_loader and not self.config.TEST_WITH_BEST_MODEL:
             logging.info("Performing final test...")
             # 加载最佳模型
-            self.checkpoint_manager.load_best_model()
+            # self.checkpoint_manager.load_best_model()
+            test_results = self.test(test_loader)
+            self.log_metrics('final_test', test_results['metrics'], self.config.EPOCHS)
 
 
         # 训练结束后，关闭tensorboard   
         self.writer.close()
-        self.log_progress("Training finished!")
+        logging.info("Training finished!")
 
-    def test(self, test_loader):
+    def test(self, test_loader, use_best_model=True):
         """测试模型"""
+        # 保存当前模型状态
+        current_model_state = deepcopy(self.model.state_dict())
+        
+        # 如果使用最佳模型，加载最佳模型状态
+        if use_best_model:
+            # self.checkpoint_manager.load_best_model()
+            if self.best_model_state is None:
+                logging.warning("No best model state found, using current model state")
+            else:
+                self.model.load_state_dict(self.best_model_state)
+         
+        # 测试       
         self.model.eval()
         metrics = AverageMeter()
         predictions = []
@@ -199,9 +249,23 @@ class BaseLearner:
             'metrics': metrics.average(),
             'predictions': predictions,
             'targets': targets,
+            'model_type': 'best' if use_best_model else 'current'
         }
-
+        self.save_test_results(test_results)
+        
+        # 如果使用了最佳模型，恢复到当前模型状态
+        if use_best_model:
+            self.model.load_state_dict(current_model_state)
+        
         return test_results
+
+    def save_test_results(self, test_results):
+        """保存测试结果"""
+        results_dir = self.exp_manager.exp_dir / "test_results"
+        results_dir.mkdir(parents=True, exist_ok=True)
+        results_file = results_dir / f"test_results_{test_results['model_type']}.pth"
+        torch.save(test_results, results_file)
+        logging.info("Test results saved to %s", results_file)      
     
     def validate(self, valid_loader, epoch):
         """验证模型"""
@@ -220,6 +284,13 @@ class BaseLearner:
                 metrics.update("val_loss", val_loss)
                 metrics.update("val_acc", val_acc)
         avg_metrics = metrics.average()
+        
+        # 如果是最佳模型，保存模型状态的深度复制
+        if avg_metrics['val_loss'] < self.best_val_metrics['val_loss']:
+            self.best_val_metrics = avg_metrics['val_loss']
+            self.best_model_state_dict = deepcopy(self.model.state_dict())
+        
+        # 记录验证过程
         self.log_progress('val', epoch, 0, 1, metrics)
         return avg_metrics
 
@@ -256,6 +327,8 @@ class BaseLearner:
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.best_val_metrics = checkpoint['best_val_metrics']
+        self.best_model_state_dict = checkpoint['model_state_dict']
+        
         
 
 

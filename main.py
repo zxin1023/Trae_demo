@@ -13,7 +13,7 @@ from utils.custom_learner import CustomLearner
 def prepare_data(config):
     """准备数据加载器"""
     # 加载数据集
-    dataset = CustomDataset(config.DATA_DIRC  )
+    dataset = CustomDataset(config.DATA_DIR)
     
     # 划分数据集
     total_size = len(dataset)
@@ -37,7 +37,7 @@ def main():
     
     # 创建实验管理器
     exp_manager = ExperimentManager(config)
-    exp_manager.setup()
+    # exp_manager.setup()
     
     # 数据集加载
     train_loader, valid_loader, test_loader = prepare_data(config)
