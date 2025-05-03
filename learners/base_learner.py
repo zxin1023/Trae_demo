@@ -246,7 +246,7 @@ class BaseLearner:
 
         # 保存测试结果
         test_results = {
-            'metrics': metrics.average(),
+            'metrics': metrics.averages(),
             'predictions': predictions,
             'targets': targets,
             'model_type': 'best' if use_best_model else 'current'
